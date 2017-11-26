@@ -28,23 +28,31 @@ type TokenMessage struct {
 	Free bool   `json:"free"`
 	Src  int    `json:"src"`
 	Dst  int    `json:"dst"`
+	Sndr int    `json:"sender"`
 	Data string `json:"data"`
 	Ack  bool   `json:"ack"`
 }
+// Can omit sender if process it externally using ReceiveFromUDP. 
+// It's here just to simplify processing.
+
 
 // NewEmptyTokenMessage creates new message from input parameters.
-func NewEmptyTokenMessage() TokenMessage {
-	return TokenMessage{ true, -1, -1, "", false }
+func NewEmptyTokenMessage(sender int) TokenMessage {
+	return TokenMessage{ true, -1, -1, sender, "", false }
 }
 
 // NewTokenMessage creates new message from input parameters.
-func NewTokenMessage(src int, dst int, data string, isAck bool) TokenMessage {
-	return TokenMessage{ false, src, dst, data, isAck }
+func NewTokenMessage(src int, dst int, sndr int, data string, isAck bool) TokenMessage {
+	return TokenMessage{ false, src, dst, sndr, data, isAck }
 }
 
 func (m TokenMessage) String() string {
 	if m.Free {
-		return "empty token"
-	}
-	return fmt.Sprintf("{src: %d, dst: %d, data: %s}", m.Src, m.Dst, m.Data)
+		return fmt.Sprintf("empty token from node %d", m.Sndr)
+	} else if m.Ack {
+		return fmt.Sprintf("token from node %d with delivery confirmation from node %d to node %d", 
+				m.Sndr, m.Src, m.Dst)
+	} 
+	return fmt.Sprintf("token from node %d with data from %d(data = \"%s\") to %d", 
+			m.Sndr, m.Src, m.Data, m.Dst)
 }

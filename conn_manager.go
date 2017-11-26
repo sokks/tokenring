@@ -3,6 +3,8 @@ package tokenring
 import (
 	"time"
 	"net"
+	"strconv"
+	"encoding/json"
 )
 
 type ConnManager struct {
@@ -14,7 +16,7 @@ type ConnManager struct {
 }
 
 func NewConnManager(port int, faultTimeout int) (*ConnManager) {
-	bind := func(port) (*net.UDPConn) {
+	bind := func(port int) (*net.UDPConn) {
 		laddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 		if err != nil {
 			logger.Printf("ERROR: cannot resolve service address 127.0.0.1:%d\n", port)
@@ -33,7 +35,7 @@ func NewConnManager(port int, faultTimeout int) (*ConnManager) {
 	}
 
 	m.udpConn = bind(port)
-	m.timeout = time.Duration(faultTimeout * time.Millisecond)
+	m.timeout = time.Duration(faultTimeout * int(time.Millisecond))
 	return m
 } 
 
@@ -59,8 +61,8 @@ func (m *ConnManager) work() {
 		default:
 			msg := TokenMessage{}
 			// set timeout for token ring fault handling
-			node.udpConn.SetReadDeadline(time.Now().Add(m.timeout))
-			n, _, err := node.udpConn.ReadFromUDP(buffer)
+			m.udpConn.SetReadDeadline(time.Now().Add(m.timeout))
+			n, _, err := m.udpConn.ReadFromUDP(buffer)
 			if err != nil {
 				if e, ok := err.(net.Error); !ok || !e.Timeout() {
 					panic(err)
@@ -86,7 +88,7 @@ func (m *ConnManager) Send(msg TokenMessage, port int) {
 		return
 	}
 	buffer, _ := json.Marshal(msg)
-	_, err = s.udpConn.WriteToUDP(buffer, raddr)
+	_, err = m.udpConn.WriteToUDP(buffer, raddr)
 	if err != nil {
 		_ = err
 	}

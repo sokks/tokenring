@@ -24,13 +24,13 @@ type TokenRing struct {
 
 func NewTokenRing(n, dl int) (*TokenRing) {
 	r := &TokenRing{
-		size: n,
-		kill: make(chan struct{}),
-		delay: time.Duration(dl * time.Millisecond)
-		nodes: make([]*Node, n)
+		size:  n,
+		kill:  make(chan struct{}),
+		delay: time.Duration(dl * int(time.Millisecond)),
+		nodes: make([]*Node, n),
 	}
 	for i := 0; i < n; i++ {
-		nodes[i] = NewNode(n, i, BasePort + i, BaseServicePort + i)
+		r.nodes[i] = NewNode(n, i, BasePort + i, BaseServicePort + i, dl)
 	}
 	return r
 }
@@ -39,14 +39,15 @@ func (r *TokenRing) Start() {
 	logger = initLogger()
 	logger.Println(time.Now().String(), "Start")
 	for i := 0; i < r.size; i++ {
-		go r.nodes[i].process(r.kill, r.delay)
+		go r.nodes[i].process(r.kill)
 	}
 	time.Sleep(time.Second)
+	r.nodes[0].manager.Send(NewEmptyTokenMessage(0), BasePort + 1)
 }
 
 func (r *TokenRing) Stop() {
-	for i := 0; i <= GN.size; i++ {
-		GN.kill <- struct{}{}
+	for i := 0; i <= r.size; i++ {
+		r.kill <- struct{}{}
 		time.Sleep(50 * time.Millisecond)
 	}
 	closeLogger()
