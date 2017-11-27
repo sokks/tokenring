@@ -1,6 +1,7 @@
 package tokenring
 
 import (
+	"fmt"
 	"os"
 	"log"
 	"time"
@@ -26,15 +27,18 @@ func NewNode(size, nId, dPort, sPort, maxDelay int) (*Node) {
 		dataPort:    dPort,
 		servicePort: sPort,
 		delay:       time.Duration(maxDelay * int(time.Millisecond)),
-		manager:     NewConnManager(dPort, maxDelay * (size + 5)),
+		manager:     NewConnManager(dPort, maxDelay * (size + 2)),
 		service:     NewNodeService(sPort),
 		messages:    make([]TokenMessage, 0, 10),
-		logger:      log.New(os.Stdout, "Node " + strconv.Itoa(nId) + ":", log.Ltime),
+		logger:      log.New(os.Stdout, "[node " + strconv.Itoa(nId) + "] ", log.Ltime),
 	}
 }
 
 
 func (node *Node) process(kill chan struct{}) {
+	var (
+		toDrop = false
+	)
 	processServiceMsg := func(msg ServiceMessage) {
 		if msg.MsgType == "send" {
 			newMsg := NewTokenMessage(node.id, msg.Dst, node.id, msg.Data, false)
@@ -45,6 +49,8 @@ func (node *Node) process(kill chan struct{}) {
 			// switch on
 		} else if msg.MsgType == "drop" {
 			// drop one token
+			toDrop = true
+			fmt.Println(toDrop)
 		}
 	}
 
@@ -52,12 +58,12 @@ func (node *Node) process(kill chan struct{}) {
 		if inMsg.Free {
 			if len(node.messages) > 0 {
 				outMsg = node.messages[0]
-				node.messages = node.messages[1:] // check!
 			} else {
 				outMsg = NewEmptyTokenMessage(node.id)
 			}
 		} else if inMsg.Dst == node.id {
 			if inMsg.Ack {
+				node.messages = node.messages[1:]
 				outMsg = NewEmptyTokenMessage(node.id)
 			} else {
 				outMsg = NewTokenMessage(node.id, inMsg.Src, node.id, "", true)
@@ -72,35 +78,41 @@ func (node *Node) process(kill chan struct{}) {
 		return (node.id + 1) % node.ringSize
 	}
 	
-	node.service.Start()
-	defer node.service.Stop()
 	node.manager.Start()
+	defer node.logger.Println("manager terminated")
+	defer time.Sleep(time.Duration((node.ringSize * 2) * int(node.delay)))
 	defer node.manager.Stop()
-	var lastSent TokenMessage
+	node.service.Start()
+	defer node.logger.Println("service terminated")
+	defer node.service.Stop()
+	//var lastSent TokenMessage
 	for {
 		select {
 		case <-kill:
+			node.logger.Printf("node termination")
 			return
 		case msg := <-node.service.C:
 			node.logger.Println("received service message:", msg)
 			processServiceMsg(msg)
-		case <- node.manager.Fault:
-			// process fault TODO
-			t := time.After(node.delay)
-			node.logger.Printf("token timeout, sending copy to node %d\n", getNextId())
-			select {
-			case <-t:
-				node.manager.Send(lastSent, getNextId())
-			}
 		case msg := <-node.manager.Token:
-			t := time.After(node.delay)
-			newMsg := processToken(msg)
-			node.logger.Printf("received %s, sending token to node %d\n", msg, getNextId())
-			select {
-			case <-t:
-				node.manager.Send(newMsg, BasePort + getNextId())
-				lastSent = newMsg
+			if toDrop {
+				toDrop = false
+				node.logger.Println(toDrop)
+				continue
+			} else {
+				t := time.After(node.delay)
+				newMsg := processToken(msg)
+				node.logger.Printf("received %s, sending token to node %d\n", msg, getNextId())
+				select {
+				case <-t:
+					node.manager.Send(newMsg, BasePort + getNextId())
+					//lastSent = newMsg
+				}
 			}
+		case <-node.manager.Fault:
+			// process fault TODO
+			node.logger.Printf("token timeout, sending empty token to node %d\n", getNextId())
+			node.manager.Send(NewEmptyTokenMessage(node.id), BasePort + getNextId())
 		}
 	}
 }

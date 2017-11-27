@@ -23,7 +23,6 @@ func NewNodeService(port int) (*NodeService) {
 		}
 		conn, err := net.ListenUDP("udp", laddr)
 		if err != nil {
-			fmt.Println("ERROR: cannot bind service port", port)
 		}
 		return conn
 	}
@@ -52,6 +51,7 @@ func (s *NodeService) Stop() {
 
 func (s *NodeService) listen() {
 	timeout := time.Duration(50 * time.Millisecond)
+	Loop:
 	for {
 		select {
 		case <-s.kill:
@@ -65,7 +65,7 @@ func (s *NodeService) listen() {
 				if e, ok := err.(net.Error); !ok || !e.Timeout() {
 					panic(err)
 				} else {
-					continue
+					continue Loop
 				}
 			} else {
 				if n != 0 {

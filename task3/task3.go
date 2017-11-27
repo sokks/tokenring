@@ -22,8 +22,10 @@ func main() {
 	tr.Start()
 	fmt.Scanln()
 	sendServiceMsg(tokenring.NewServiceMessage("send", 3, "lalala"), 40000)
+	//fmt.Scanln()
+	//sendServiceMsg(tokenring.NewServiceMessage("terminate", 1, ""), 40001)
 	fmt.Scanln()
-	sendServiceMsg(tokenring.NewServiceMessage("terminate", 1, ""), 40001)
+	sendServiceMsg(tokenring.NewServiceMessage("drop", 1, ""), 40001)
 	fmt.Scanln()
 	tr.Stop()
 }

@@ -1,6 +1,7 @@
 package tokenring
 
 import (
+	//"fmt"
 	"time"
 	"net"
 	"strconv"
@@ -29,8 +30,8 @@ func NewConnManager(port int, faultTimeout int) (*ConnManager) {
 	}
 
 	m := &ConnManager{
-		Fault: make(chan struct{}),
-		Token: make(chan TokenMessage),
+		Fault: make(chan struct{}, 2),
+		Token: make(chan TokenMessage, 2),
 		kill:  make(chan struct{}),
 	}
 
@@ -68,7 +69,8 @@ func (m *ConnManager) work() {
 					panic(err)
 				} else {
 					// process fault (no token)
-					m.Fault <- struct{}{}
+					logger.Println(err)
+					m.Fault <- struct{}{} // non-buffered -> blocks while not read
 				}
 			} else {
 				if n != 0 {
@@ -90,6 +92,6 @@ func (m *ConnManager) Send(msg TokenMessage, port int) {
 	buffer, _ := json.Marshal(msg)
 	_, err = m.udpConn.WriteToUDP(buffer, raddr)
 	if err != nil {
-		_ = err
+		logger.Println(err)
 	}
 } 

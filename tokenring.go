@@ -46,18 +46,13 @@ func (r *TokenRing) Start() {
 }
 
 func (r *TokenRing) Stop() {
-	for i := 0; i <= r.size; i++ {
+	for i := 0; i < r.size; i++ {
 		r.kill <- struct{}{}
 		time.Sleep(50 * time.Millisecond)
 	}
-	closeLogger()
+	logger.Println(time.Now().String(), "Stop")
 }
 
 func initLogger() (*log.Logger) {
 	return log.New(os.Stdout, "Common:", log.Ltime)
 }
-
-func closeLogger() {
-	// ??
-}
-	
