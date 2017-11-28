@@ -29,8 +29,9 @@ func NewTokenRing(n, dl int) (*TokenRing) {
 		delay: time.Duration(dl * int(time.Millisecond)),
 		nodes: make([]*Node, n),
 	}
-	for i := 0; i < n; i++ {
-		r.nodes[i] = NewNode(n, i, BasePort + i, BaseServicePort + i, dl)
+	r.nodes[0] = NewNode(true, n, 0, BasePort, BaseServicePort, dl)
+	for i := 1; i < n; i++ {
+		r.nodes[i] = NewNode(false, n, i, BasePort + i, BaseServicePort + i, dl)
 	}
 	return r
 }
@@ -42,7 +43,7 @@ func (r *TokenRing) Start() {
 		go r.nodes[i].process(r.kill)
 	}
 	time.Sleep(time.Second)
-	r.nodes[0].manager.Send(NewEmptyTokenMessage(0), BasePort + 1)
+	r.nodes[0].manager.Send(NewEmptyToken(0), BasePort + 1)
 }
 
 func (r *TokenRing) Stop() {

@@ -12,7 +12,7 @@ type ConnManager struct {
 	udpConn *net.UDPConn
 	timeout time.Duration
 	Fault   chan struct{}
-	Token   chan TokenMessage
+	Data    chan Token
 	kill    chan struct{}
 }
 
@@ -31,7 +31,7 @@ func NewConnManager(port int, faultTimeout int) (*ConnManager) {
 
 	m := &ConnManager{
 		Fault: make(chan struct{}, 2),
-		Token: make(chan TokenMessage, 2),
+		Data:  make(chan Token, 2),
 		kill:  make(chan struct{}),
 	}
 
@@ -60,7 +60,7 @@ func (m *ConnManager) work() {
 		case <-m.kill:
 			return
 		default:
-			msg := TokenMessage{}
+			msg := Token{}
 			// set timeout for token ring fault handling
 			m.udpConn.SetReadDeadline(time.Now().Add(m.timeout))
 			n, _, err := m.udpConn.ReadFromUDP(buffer)
@@ -76,14 +76,14 @@ func (m *ConnManager) work() {
 				if n != 0 {
 					json.Unmarshal(buffer[:n], &msg)
 					// process token
-					m.Token <- msg
+					m.Data <- msg
 				}
 			}
 		}
 	}
 }
 
-func (m *ConnManager) Send(msg TokenMessage, port int) {
+func (m *ConnManager) Send(msg Token, port int) {
 	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
 		logger.Printf("ERROR: cannot resolve address 127.0.0.1:%d\n", port)
