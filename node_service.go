@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// NodeService is a non-blocking listener for maintainance port.
 type NodeService struct {
 	C       chan ServiceMessage
 	udpConn *net.UDPConn

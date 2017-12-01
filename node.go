@@ -7,109 +7,187 @@ import (
 	"strconv"
 )
 
+type info struct {
+	id    int
+	sent  bool
+	acked bool
+}
+
 // Node contains internal info and works independently
 type Node struct {
 	ON          bool             // is switched on
 	ringSize    int              // number of nodes in the net
 	id          int              // node's id
-	dataPort    int              // node's port number
-	servicePort int              // node's maintainance port
 	delay       time.Duration    // max marker hold time
 	manager     *ConnManager     // node's token connection manager
 	service     *NodeService     // node's maintainance connection receiver
-	messages    []message        // messages waiting to be sent
+	messages    []Token          // messages waiting to be sent
 	logger      *log.Logger      // node's logger with prefix
 }
 
-// TODO port number is not so good idea, because in process it is 
-// counted as next (30000 + nextId): parameter next port would be better.
-
 // NewNode conatructs new active node. Parameters are size of the ring, 
 // node's id, token port, maintainance port, marker hold time.
-func NewNode(isAM bool, size, nID, dPort, sPort, maxDelay int) (*Node) {
+func NewNode(size, nID, dPort, sPort, maxDelay int) (*Node) {
 	return &Node{
 		ON:          true,
 		ringSize:    size,
 		id:          nID,
-		dataPort:    dPort,
-		servicePort: sPort,
 		delay:       time.Duration(maxDelay * int(time.Millisecond)),
 		manager:     NewConnManager(dPort, maxDelay * (size + 2)),
 		service:     NewNodeService(sPort),
-		messages:    make([]message, 0, 10),
+		messages:    make([]Token, 0, 10),
 		logger:      log.New(os.Stdout, "[node " + strconv.Itoa(nID) + "] ", log.Ltime),
 	}
 }
 
 
 func (node *Node) process(kill chan struct{}) {
-	var (
-		toDrop = 0
-		wasTimeout = false
-		toRecover = false
-		failedNode = -1
-		nextID = (node.id + 1) % node.ringSize
-		toSend = make([]Token, 0, 10)
-		//tt <-chan time.Time
+	const (
+		failedTimeouts = 3
+		lossTimeouts   = 1
 	)
+	var (
+		failedNode = -1    // currently terminated node's id (-1 for all alive)
+		nextID     = (node.id + 1) % node.ringSize
+
+		toDrop     = 0     // number of tokens to drop     
+		toRecover  = false // flag of recovery (set with service message)
+		
+		timeouts   = 0     // number of timeouts occured in a row
+		failure    *info   // notification info for other nodes
+		recovery   *info   // ~ failure
+	)
+
+/****************************************************************************/	
+/************************ service message processing  ***********************/	
+/****************************************************************************/	
+
 	processServiceMsg := func(msg ServiceMessage) {
 		if msg.MsgType == "send" {
-			newMsg := newMessage(msg.Dst, msg.Data)
+			newMsg := NewDataToken(node.id, msg.Dst, node.id, msg.Data)
 			node.messages = append(node.messages, newMsg)
 		} else if msg.MsgType == "terminate" {
-			node.ON = false // TODO: process it when sending message; or AM should kill this message
-			node.logger.Println("terminated")
+			if node.ON {
+				node.ON = false
+				failedNode = node.id
+				node.manager.Stop()
+				node.logger.Println("terminated")
+			}
 		} else if msg.MsgType == "recover" {
-			node.ON = true
-			node.logger.Println("recovered")
-			toRecover = true
+			if !node.ON {
+				node.ON = true
+				node.manager.Start()
+				node.logger.Println("recovered")
+				toRecover = true
+			}
 		} else if msg.MsgType == "drop" {
 			toDrop ++
 		}
 	}
 
-	processToken := func(inMsg Token) (outMsg Token) {
-		if inMsg.Free {
-			if len(node.messages) > 0 {
-				if node.messages[0].dst == failedNode {
-					node.messages = append(node.messages[1:], node.messages[0])
+/****************************************************************************/	
+/********************** one token processing (complex) **********************/	
+/****************************************************************************/	
+
+	processToken := func(inMsg Token) (outMsg Token, notToSend bool) {
+		if !inMsg.New && failure != nil && inMsg.Sndr == failure.id {
+			node.logger.Println("failure canceled")
+			if failure.acked {
+				failure = nil
+				recovery = &info{inMsg.Sndr, false, false}
+			}
+			failure = nil
+			failedNode = -1
+			notToSend = true
+			return
+
+		}
+		if inMsg.Free {  // empty token
+			if failure != nil && !failure.acked {
+				outMsg = NewInfoToken(node.id, failure.id, true)
+			} else if recovery != nil && !recovery.sent {
+				outMsg = NewInfoToken(node.id, recovery.id, false)
+				recovery.sent = true
+			} else if recovery != nil && !recovery.acked {
+				outMsg = NewInfoToken(node.id, recovery.id, false)
+			} else if len(node.messages) > 0 {
+				if (failedNode != -1) && node.messages[0].Dst == failedNode {
+					newMessages := make([]Token, len(node.messages))
+					for i := 1; i < len(node.messages); i++ {
+						newMessages[i - 1] = node.messages[i]
+					}
+					newMessages[len(node.messages) - 1] = node.messages[0]
+					node.messages = newMessages
 					outMsg = NewEmptyToken(node.id)
+				} else {
+					outMsg = node.messages[0]
 				}
-				outMsg = NewTokenWithMessage(node.id, node.messages[0])
 			} else {
 				outMsg = NewEmptyToken(node.id)
 			}
-		} else if inMsg.Fail {
-			if failedID, _ := strconv.Atoi(inMsg.Data); failedID == nextID {
-				failedNode = failedID
-				nextID = (failedID + 1) % node.ringSize
-				outMsg = NewEmptyToken(node.id)
-			} else {
-				failedNode = failedID
-				outMsg = CopyToken(inMsg, node.id)
-			}
-		} else if inMsg.New {
-			if newID, _ := strconv.Atoi(inMsg.Data); (newID > node.id) && (newID < nextID) {
-				failedNode = -1
-				nextID = newID
-				outMsg = NewEmptyToken(node.id)
-			} else {
-				failedNode = -1
-				outMsg = CopyToken(inMsg, node.id)
-			}
-		} else if inMsg.Dst == node.id {
+		}  else if inMsg.Dst == node.id { // message to this node
 			if inMsg.Ack {
-				node.messages = node.messages[1:]
+				if len(node.messages) == 1 {
+					node.messages = make([]Token, 0, 10)
+				} else {
+					node.messages = node.messages[1:]
+				}
 				outMsg = NewEmptyToken(node.id) // send empty to prevent monopolia
 			} else {
 				outMsg = NewAckToken(node.id, inMsg.Src)
 			}
+		} else if inMsg.Fail { // termination info
+			failedID, _ := strconv.Atoi(inMsg.Data)
+			if failure != nil && failedID == failure.id {
+				failure.acked = true
+				node.logger.Println("failure acked")
+				outMsg = NewEmptyToken(node.id)
+				return
+			}
+			if failure == nil && recovery != nil && failedID == recovery.id {
+				node.logger.Println("failure acked")
+				outMsg = NewEmptyToken(node.id)
+				return
+			}
+			if failure != nil && failedID != failure.id {
+				failure = nil
+			}
+			failedNode = failedID
+			if failedID == nextID {
+				nextID = (failedID + 1) % node.ringSize
+			}
+			outMsg = CopyToken(inMsg, node.id)
+		} else if inMsg.New {  // recovery info
+			newID, _ := strconv.Atoi(inMsg.Data)
+			if failure != nil && inMsg.Sndr == failure.id && newID == failure.id {
+				node.logger.Println("recovery detected")
+				failure = nil
+				recovery = &info{inMsg.Sndr, false, false}
+				failedNode = -1
+				notToSend = true
+				return
+			}
+			
+			if recovery != nil && recovery.id == newID { // recovery acked
+				recovery = nil
+				outMsg = NewEmptyToken(node.id)
+				return
+			}
+			failedNode = -1
+			if (node.id + 1) % node.ringSize == newID {
+				nextID = newID
+			}
+			outMsg = CopyToken(inMsg, node.id)
 		} else {
 			outMsg = CopyToken(inMsg, node.id)
 		}
 		return
 	}
-	
+
+/****************************************************************************/	
+/******************************* MAIN PROCESS *******************************/	
+/****************************************************************************/	
+
 	node.manager.Start()
 	defer node.logger.Println("manager terminated")
 	defer time.Sleep(time.Duration((node.ringSize * 2) * int(node.delay)))
@@ -117,9 +195,6 @@ func (node *Node) process(kill chan struct{}) {
 	node.service.Start()
 	defer node.logger.Println("service terminated")
 	defer node.service.Stop()
-	
-	ticker := time.NewTicker(time.Duration(int(node.delay) * node.ringSize))
-	defer ticker.Stop()
 
 	for {
 		select {
@@ -130,8 +205,7 @@ func (node *Node) process(kill chan struct{}) {
 			node.logger.Println("received service message:", msg)
 			processServiceMsg(msg)
 		case msg := <-node.manager.Data:
-			// how to process double receive??
-			wasTimeout = false
+			timeouts = 0
 			if !node.ON {
 				continue
 			} else if toDrop > 0 {
@@ -139,33 +213,41 @@ func (node *Node) process(kill chan struct{}) {
 				node.logger.Println("dropped token")
 				continue
 			} else {
-				t := time.After(node.delay)
-				newMsg := processToken(msg)
-				node.logger.Printf("received %s, sending token to node %d\n", msg, nextID)
-				toSend = append(toSend, newMsg)
-				select {
-				case <-t:
-					node.manager.Send(newMsg, BasePort + nextID)
+				t := time.After(node.delay) // one node delay control
+				newMsg, notToSend := processToken(msg)
+				if notToSend {
+					node.logger.Printf("received %s\n", msg)
+				} else {
+					node.logger.Printf("received %s, sending token to node %d\n", msg, nextID)
+					select {
+					case <-t:
+						node.manager.Send(newMsg, BasePort + nextID)
+					}
 				}
 			}
-		case <-ticker.C: // only one token control
-			if len(toSend) > 1 {
-				toDrop ++
-			}
-			toSend = make([]Token, 0, 10)
-		case <-node.manager.Fault:
+		case <-node.manager.Fault: // timeout
 			if !node.ON {
 				continue
-			} else if wasTimeout {
-				// previous node terminated
-				newMsg := NewInfoToken(node.id, (node.id + node.ringSize - 1) % node.ringSize, true)
-				node.logger.Printf("fault detected, sending %s to node %d\n", newMsg, nextID)
-				node.manager.Send(newMsg, BasePort + nextID)
 			} else {
-				// lost token
-				wasTimeout = true
-				node.logger.Printf("token timeout, sending new empty token to node %d\n", nextID)
-				node.manager.Send(NewEmptyToken(node.id), BasePort + nextID)
+				timeouts++
+				node.logger.Println("timeouts =", timeouts)
+				if (timeouts > failedTimeouts) && failedNode == -1 {
+					// previous node terminated
+					failedNode = (node.id + node.ringSize - 1) % node.ringSize
+					failure = &info{failedNode, true, false}
+					newMsg := NewInfoToken(node.id, failedNode, true)
+					node.logger.Printf("termination detected, sending %s to node %d", newMsg, nextID)
+					node.manager.Send(newMsg, BasePort + nextID)
+				} else if timeouts > failedTimeouts && failure != nil {
+					// previous node terminated, it is already detected but not corrected
+					newMsg := NewInfoToken(node.id, failure.id, true)
+					node.logger.Printf("termination detected again, sending %s to node %d", newMsg, nextID)
+					node.manager.Send(newMsg, BasePort + nextID)
+				} else if timeouts > lossTimeouts {
+					// lost token
+					node.logger.Printf("token timeout, sending new empty token to node %d\n", nextID)
+					node.manager.Send(NewEmptyToken(node.id), BasePort + nextID)
+				}
 			}
 		}
 		if toRecover {

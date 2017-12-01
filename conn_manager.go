@@ -1,14 +1,16 @@
 package tokenring
 
 import (
-	//"fmt"
-	"time"
+	"encoding/json"
 	"net"
 	"strconv"
-	"encoding/json"
+	"time"
 )
 
+// ConnManager handles socket operations. It sends all received data 
+// to Data channel and all timeouts information to Fault channel.
 type ConnManager struct {
+	addr    *net.UDPAddr
 	udpConn *net.UDPConn
 	timeout time.Duration
 	Fault   chan struct{}
@@ -16,41 +18,41 @@ type ConnManager struct {
 	kill    chan struct{}
 }
 
+// NewConnManager creates UDP connection manager for port with faultTimeout.
+// Constructor does not bind port. Use Start() to start listening.
 func NewConnManager(port int, faultTimeout int) (*ConnManager) {
-	bind := func(port int) (*net.UDPConn) {
-		laddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-		if err != nil {
-			logger.Printf("ERROR: cannot resolve service address 127.0.0.1:%d\n", port)
-		}
-		conn, err := net.ListenUDP("udp", laddr)
-		if err != nil {
-			logger.Println("ERROR: cannot bind service port", port)
-		}
-		return conn
+	laddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		logger.Printf("ERROR: cannot resolve service address 127.0.0.1:%d\n", port)
 	}
 
 	m := &ConnManager{
+		addr:  laddr,
 		Fault: make(chan struct{}, 2),
 		Data:  make(chan Token, 2),
 		kill:  make(chan struct{}),
 	}
 
-	m.udpConn = bind(port)
 	m.timeout = time.Duration(faultTimeout * int(time.Millisecond))
 	return m
 } 
 
+// Start opens UDP connection and starts listening in seporate goroutine.
 func (m *ConnManager) Start() {
+	conn, err := net.ListenUDP("udp", m.addr)
+	if err != nil {
+		logger.Println("ERROR: cannot bind address", m.addr)
+	}
+	m.udpConn = conn
+	time.Sleep(10 * time.Millisecond)
 	go m.work()
 }
 
+// Stop closes connection and stops listening goroutine.
 func (m *ConnManager) Stop() {
-	unbind := func() {
-		m.udpConn.Close()
-	}
 	m.kill <- struct{}{}
-	time.Sleep(time.Duration(50 * time.Millisecond))
-	unbind()
+	time.Sleep(time.Duration(10 * time.Millisecond))
+	m.udpConn.Close()
 }
 
 func (m *ConnManager) work() {
@@ -69,8 +71,7 @@ func (m *ConnManager) work() {
 					panic(err)
 				} else {
 					// process fault (no token)
-					logger.Println(err)
-					m.Fault <- struct{}{} // non-buffered -> blocks while not read
+					m.Fault <- struct{}{}
 				}
 			} else {
 				if n != 0 {
@@ -83,6 +84,7 @@ func (m *ConnManager) work() {
 	}
 }
 
+// Send engages connection manager to send message to port of lo.
 func (m *ConnManager) Send(msg Token, port int) {
 	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {

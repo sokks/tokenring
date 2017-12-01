@@ -29,9 +29,8 @@ func NewTokenRing(n, dl int) (*TokenRing) {
 		delay: time.Duration(dl * int(time.Millisecond)),
 		nodes: make([]*Node, n),
 	}
-	r.nodes[0] = NewNode(true, n, 0, BasePort, BaseServicePort, dl)
-	for i := 1; i < n; i++ {
-		r.nodes[i] = NewNode(false, n, i, BasePort + i, BaseServicePort + i, dl)
+	for i := 0; i < n; i++ {
+		r.nodes[i] = NewNode(n, i, BasePort + i, BaseServicePort + i, dl)
 	}
 	return r
 }

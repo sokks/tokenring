@@ -2,10 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net"
-	"os"
 	"strconv"
+	"time"
 
 	"github.com/sokks/tokenring"
 )
@@ -15,25 +16,39 @@ const (
 )
 
 func main() {
-	fmt.Println(os.Args)
-	n, _ := strconv.Atoi(os.Args[1])
-	dl, _ := strconv.Atoi(os.Args[2])
-	tr := tokenring.NewTokenRing(n, dl)
-	tr.Start()
-	//fmt.Scanln()
-	//sendServiceMsg(tokenring.NewServiceMessage("send", 3, "lalala"), 40000)
-	//fmt.Scanln()
-	//sendServiceMsg(tokenring.NewServiceMessage("terminate", 1, ""), 40001)
-	//fmt.Scanln()
-	//sendServiceMsg(tokenring.NewServiceMessage("drop", 1, ""), 40001)
-	
-	fmt.Scanln()
-	sendServiceMsg(tokenring.NewServiceMessage("terminate", 2, ""), 40002)
-	
-	fmt.Scanln()
-	sendServiceMsg(tokenring.NewServiceMessage("recover", 2, ""), 40002)
+	sizePtr := flag.Int("n", 5, "number of nodes in the token ring")
+	delayPtr := flag.Int("t", 1000, "one node token delay (milliseconds)")
+	flag.Parse()
+	tr := tokenring.NewTokenRing(*sizePtr, *delayPtr)
 
-	fmt.Scanln()
+	tr.Start()
+	time.Sleep(2 * time.Second)
+
+	sendServiceMsg(tokenring.NewServiceMessage("send", 3, "lalala1"), tokenring.BaseServicePort + 0)
+//	sendServiceMsg(tokenring.NewServiceMessage("drop", 0, ""), tokenring.BaseServicePort + 2)
+	sendServiceMsg(tokenring.NewServiceMessage("send", 3, "lalala2"), tokenring.BaseServicePort + 0)
+	sendServiceMsg(tokenring.NewServiceMessage("send", 3, "lalala3"), tokenring.BaseServicePort + 1)
+	sendServiceMsg(tokenring.NewServiceMessage("send", 3, "lalala4"), tokenring.BaseServicePort + 2)
+	
+	sendServiceMsg(tokenring.NewServiceMessage("terminate", 2, ""), tokenring.BaseServicePort + 2)
+
+	time.Sleep(30 * time.Second)
+	sendServiceMsg(tokenring.NewServiceMessage("drop", 0, ""), tokenring.BaseServicePort+ 0)
+// 	sendServiceMsg(tokenring.NewServiceMessage("drop", 0, ""), tokenring.BaseServicePort+ 0)
+// 	sendServiceMsg(tokenring.NewServiceMessage("drop", 0, ""), tokenring.BaseServicePort+ 0)
+// 	sendServiceMsg(tokenring.NewServiceMessage("drop", 0, ""), tokenring.BaseServicePort+ 0)
+
+//	fmt.Scanln()
+	time.Sleep(1 * time.Minute)
+	sendServiceMsg(tokenring.NewServiceMessage("recover", 2, ""), tokenring.BaseServicePort + 2)
+
+	time.Sleep(30 * time.Second)
+	sendServiceMsg(tokenring.NewServiceMessage("terminate", 4, ""), tokenring.BaseServicePort + 4)
+	time.Sleep(30 * time.Second)
+	sendServiceMsg(tokenring.NewServiceMessage("recover", 4, ""), tokenring.BaseServicePort + 4)
+
+	time.Sleep(10 * time.Second)
+//	fmt.Scanln()
 	tr.Stop()
 }
 
